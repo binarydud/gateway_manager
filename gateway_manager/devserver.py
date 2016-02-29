@@ -1,13 +1,25 @@
 import imp
+import functools
+import json
 import ramlfications
 import boto3
+import logging
 from wsgiref.simple_server import make_server
 from pyramid.config import Configurator
 from pyramid.response import Response
+from paste.translogger import TransLogger
+
 from gateway_manager import api
 
 import imp, os.path
 import re
+logger = logging.getLogger(__name__)
+handler = logging.StreamHandler()
+formatter = logging.Formatter(
+        '%(asctime)s:%(levelname)-2s %(message)s')
+handler.setFormatter(formatter)
+logger.addHandler(handler)
+logger.setLevel(logging.INFO)
 
 # http://stackoverflow.com/questions/5362771/load-module-from-string-in-python
 def _import(module_name):
@@ -18,6 +30,13 @@ def _import(module_name):
 
     (file, filename, data) = imp.find_module(name, [path])
     return imp.load_module(module_name, file, filename, data)
+
+
+def build_error_response(code, error):
+    return json.dumps({
+        "message": error.message,
+        "code": code
+    })
 
 
 def run_function(request, name):
@@ -35,6 +54,7 @@ def run_function(request, name):
         "body": request.body
     }
     return module.handle(event, {})
+
 
 def _parse_response(response):
     response.pattern = response.raw[response.code].get('(selectionPattern)', None)  # NOQA
@@ -82,17 +102,29 @@ def _filter_absent_methods(resource):
     return getattr(resource, 'method') is not None
 
 
+def _filter_response(error, response):
+    if getattr(response, 'pattern') is None:
+        return False
+    return re.search(response.pattern, repr(error))
+
+
 def _call_apex(request):
-    print ('Incoming request')
     node = _lookup_table[request.matched_route.name]
     function_name = node.handler
     try:
         response = run_function(request, function_name)
     except Exception as e:
-        print node.responses
-        print repr(e)
+        partial = functools.partial(_filter_response, e)
+        response = filter(partial, node.responses)
+        if response:
+            response = response[0]
+            body = build_error_response(response.code, e)
+
+            return Response(body=body, status_code=response.code, content_type=response.body[0].mime_type)
+        return e
+    else:
+        return Response(body=json.dumps(response), content_type='application/json')
         # re.search(function_details, repr(e))
-    return Response('{} {}!'.format(request.method, request.matchdict))
 
 
 def add_resource(config, resource):
@@ -124,16 +156,22 @@ def build_lookup_table(resources):
         )
         _lookup_table[route_name] = node
 
-def bootstrap():
+
+def build_wsgi_app(raml_file):
     # read raml, create router
-    raml = ramlfications.parse('api_schema.raml')
+    raml = ramlfications.parse(raml_file)
     # resources = transform_resources(raml.resources)
-    resource = api.transform_resources(raml.resources)
+    resources = api.transform_resources(raml.resources)
     resources = filter(_filter_absent_methods, resources)
     build_lookup_table(resources)
-    print(list(resources))
-    for node in resources:
-        print(node.path)
     app = build_server(resources)
+    app = TransLogger(app, setup_console_handler=False)
+    return app
+
+
+def bootstrap(raml_file='api_schema.raml'):
+    logger.info('Creating development server')
+    app = build_wsgi_app(raml_file)
+    logger.info('Starting server on port 8080')
     server = make_server('0.0.0.0', 8080, app)
     server.serve_forever()
