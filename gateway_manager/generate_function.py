@@ -17,10 +17,8 @@ def generate(name, description, memory=128, timeout=5):
         timeout=timeout,
         runtime='python'
     )
-    print config
 
     config_template = json.dumps(config, indent=2)
-    print config_template
     if not os.path.exists(function_path):
         os.makedirs(function_path)
     if not os.path.exists(file_path):
