@@ -3,11 +3,13 @@ INSTALL_REQUIRES = [
     'pyramid',
     'boto3',
     'ramlfications',
-    'jinja2'
+    'jinja2',
+    'paste'
 ]
 
 
 TESTS_REQUIRE = [
+    'webtest'
 ]
 setup(
     author="Matt George",
