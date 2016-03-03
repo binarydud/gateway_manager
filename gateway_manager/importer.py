@@ -1,17 +1,10 @@
 #!/usr/bin/python
 import re
-from jinja2 import Template
 import ramlfications
 import boto3
 import hashlib
 import json
 import argparse
-
-
-def parse_template(path, params):
-    template_body = open(path, 'r').read()
-    template = Template(template_body)
-    return template.render(**params)
 
 
 def parse_annotations(resources):
