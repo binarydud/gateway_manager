@@ -1,16 +1,13 @@
 from setuptools import setup, find_packages
 INSTALL_REQUIRES = [
-    'pyramid',
-    'boto3',
-    'ramlfications',
-    'jinja2',
-    'paste'
+    'click==6.3',
+    'ramlfications==0.1.9',
+    'boto3==1.2.5',
+    'Paste==2.0.2',
+    'Routes==2.2',
+    'WebOb==1.5.1',
 ]
 
-
-TESTS_REQUIRE = [
-    'webtest'
-]
 setup(
     author="Matt George",
     author_email="mgeorge@gmail.com",
@@ -18,6 +15,7 @@ setup(
     description="Manage your api gateway and lambda functions with ease.",
     packages=find_packages(exclude=['tests']),
     version='0.1.0',
+    install_requires=INSTALL_REQUIRES,
     entry_points={
         'console_scripts': [
             'gateway_manage=gateway_manager.scripts:cli'
