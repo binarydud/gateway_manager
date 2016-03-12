@@ -4,9 +4,20 @@ import ramlfications
 import boto3
 import hashlib
 import json
-import argparse
+from botocore import exceptions
+from gateway_manager import api
 
 
+def get_handler_arn(project_name, hander_name):
+    client = boto3.client('lambda')
+    response = client.get_function(FunctionName='{}_{}'.format(
+        project_name,
+        hander_name
+    ))
+    return response['Configuration']['FunctionArn']
+
+
+"""
 def parse_annotations(resources):
     for resource in resources:
         if getattr(resource, 'method'):
@@ -17,6 +28,7 @@ def parse_annotations(resources):
                 response.pattern = response.raw[response.code].get('(selectionPattern)', None)  # NOQA
 
     return resources
+"""
 
 
 def get_api_by_name(client, name):
@@ -24,15 +36,15 @@ def get_api_by_name(client, name):
     return next((x for x in resp['items'] if x['name'] == name), None)
 
 
-def create_method(client, api_id, resource, http_method):
+def create_method(client, api_id, resource_id, http_method):
     method = http_method.upper()
-    if resource.existing:
-        return None
+
     return client.put_method(
         restApiId=api_id,
-        resourceId=resource.aws_id,
+        resourceId=resource_id,
         httpMethod=method,
-        authorizationType="none"
+        authorizationType="none",
+        apiKeyRequired=False
     )
 
 
@@ -128,20 +140,22 @@ def create_integration_request(
     resource_id,
     http_method,
     arn,
-    role,
-    content_type,
     update=False
 ):
     region = client._client_config.region_name
-    mapping_templates = {}
-    mapping_templates[content_type] = create_request_mapping_template()
+    template_mapping = create_request_mapping_template()
+    mapping_templates = {
+        'application/json': template_mapping,
+        'application/x-www-form-urlencoded': template_mapping
+    }
     handler_template = 'arn:aws:apigateway:{}:lambda:path/2015-03-31/functions/{}/invocations'  # NOQA
     handler = handler_template.format(region, arn)
+    method = http_method.strip().upper()
     if update:
         client.update_integration(
             restApiId=api_id,
             resourceId=resource_id,
-            httpMethod=http_method,
+            httpMethod=method,
             patchOperations=[
                 {"op": "replace", "path": "/httpMethod", "value": "POST"},
                 {"op": "replace", "path": "/uri", "value": handler},
@@ -151,14 +165,13 @@ def create_integration_request(
         client.put_integration(
             restApiId=api_id,
             resourceId=resource_id,
-            httpMethod=http_method,
+            httpMethod=method,
             type='AWS',
             # Lambda functions are always invoked via POST
             # http://docs.aws.amazon.com/lambda/latest/dg/API_Invoke.html
-            integrationHttpMethod="POST",
+            integrationHttpMethod='POST',
             uri=handler,
-            requestParameters={
-            },
+            requestParameters={},
             requestTemplates=mapping_templates,
         )
 
@@ -171,9 +184,6 @@ def create_method_response(
     status_code,
     bodies,
 ):
-    if resource.existing:
-        # this should eventually check the method response and patch
-        return
     responseModels = {}
     for body in bodies:
         if status_code < 400:
@@ -218,23 +228,32 @@ def create_integration_response(
     )
 
 
-def create_resource(client, api_id, root_id, resource):
+def create_resource(client, api_id, root_id, resource, project_name):
     resource = create_resource_path(client, api_id, root_id, resource)
     if resource.method:
         http_method = resource.method.upper()
         if http_method:
-            create_method(client, api_id, resource, http_method)
+            try:
+                client.delete_method(
+                    restApiId=api_id,
+                    resourceId=resource.aws_id,
+                    httpMethod=http_method
+                )
+            except exceptions.ClientError as e:
+                if e.response['Error']['Code'] != 'NotFoundException':
+                    raise e
+            method = create_method(client, api_id, resource.aws_id, http_method)
+            print method
+            print 'Finished creating method'
             # resaponse = resource.responses[0]
             # body = response.body[0]
-            handler_arn = build_handler_arn(resource.handler)
+            handler_arn = get_handler_arn(project_name, resource.handler)
             create_integration_request(
                 client,
                 api_id,
                 resource.aws_id,
                 http_method,
                 handler_arn,
-                resource.role,
-                "application/json"
             )
             attach_handler_policy(client, api_id, handler_arn, resource.path, http_method)  # NOQA
             for response in resource.responses:
@@ -254,18 +273,6 @@ def create_resource(client, api_id, root_id, resource):
                     response.code,
                     selection_pattern=getattr(response, 'pattern', None)
                 )
-            """
-            create_integration_request(
-                client,
-                api_id,
-                resource.aws_id,
-                http_method,
-                resource.handler,
-                resource.role,
-                body.mime_type,
-                True
-            )
-            """
 
 
 def remove_prefix(prefix, path):
@@ -327,32 +334,43 @@ def grab_root_resource(aws_resources):
 
 
 def main(region, profile='default'):
-    boto3.setup_default_session(profile_name=profile)
+    project_details = json.load(open('project.json'))
+    boto3.setup_default_session(
+        profile_name=profile,
+        region_name=region
+    )
     client = boto3.client('apigateway', region_name=region)
     raml = ramlfications.parse('api_schema.raml')
     api_name = raml.title
-    api = get_api_by_name(client, api_name)
-    if api is None:
-        api = client.create_rest_api(name=api_name)
-    aws_resources = client.get_resources(restApiId=api['id'])['items']
+    api_gateway = get_api_by_name(client, api_name)
+    if api_gateway is None:
+        api_gateway = client.create_rest_api(name=api_name)
+    aws_resources = client.get_resources(restApiId=api_gateway['id'])['items']
     root = grab_root_resource(aws_resources)
-    resource = api.transform_resources(raml.resource)
+    resources = api.transform_resources(raml.resources)
     # resources = parse_annotations(raml.resources)
     # resources = transform_resources(resources)
     resources = associate_resources(aws_resources, resources)
-
     for resource in resources:
-        create_resource(client, api['id'], root['id'], resource)
+        print 'Creating Resource'
+        create_resource(
+            client,
+            api_gateway['id'],
+            root['id'],
+            resource,
+            project_details['name']
+        )
     deployment = client.create_deployment(
-        restApiId=api['id'],
+        restApiId=api_gateway['id'],
         stageName=raml.base_uri
     )
     data = {
         'deployment': deployment['id'],
-        'api': api['id'],
+        'api': api_gateway['id'],
         'uri': 'https://{}.execute-api.{}.amazonaws.com/{}/'.format(
-            api['id'],
+            api_gateway['id'],
             region,
             raml.base_uri
         )
     }
+    print data
