@@ -183,20 +183,23 @@ def create_method_response(
     http_method,
     status_code,
     bodies,
+    headers=[],
 ):
     responseModels = {}
+    responseParameters={}
     for body in bodies:
         if status_code < 400:
             responseModels[body.mime_type] = "Empty"
         else:
             responseModels[body.mime_type] = "Error"
+    for header in headers:
+        responseParameters['method.response.header.{}'.format(header.name)] = True
     return client.put_method_response(
         restApiId=api_id,
         resourceId=resource.aws_id,
         httpMethod=http_method,
         statusCode=str(status_code),
-        responseParameters={
-        },
+        responseParameters=responseParameters,
         responseModels=responseModels
     )
 
@@ -208,6 +211,7 @@ def create_integration_response(
     http_method,
     status_code,
     selection_pattern=None,
+    headers=[]
 ):
     params = dict(
         restApiId=api_id,
@@ -223,6 +227,13 @@ def create_integration_response(
         params['responseTemplates'] = {
             "application/json": create_error_response_template(status_code)
         }
+    response_params = {}
+    for header in headers:
+        key = header.name
+        value = header.raw.get(key, '')
+        response_params['method.response.header.{}'.format(key)] = value
+    print response_params
+    params['responseParameters'] = response_params
     return client.put_integration_response(
         **params
     )
@@ -257,13 +268,16 @@ def create_resource(client, api_id, root_id, resource, project_name):
             )
             attach_handler_policy(client, api_id, handler_arn, resource.path, http_method)  # NOQA
             for response in resource.responses:
+                headers = response.headers or []
+                bodies = response.body or []
                 create_method_response(
                     client,
                     api_id,
                     resource,
                     http_method,
                     response.code,
-                    response.body
+                    bodies,
+                    headers=headers,
                 )
                 create_integration_response(
                     client,
@@ -271,7 +285,8 @@ def create_resource(client, api_id, root_id, resource, project_name):
                     resource.aws_id,
                     http_method,
                     response.code,
-                    selection_pattern=getattr(response, 'pattern', None)
+                    selection_pattern=getattr(response, 'pattern', None),
+                    headers=headers,
                 )
 
 
