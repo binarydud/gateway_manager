@@ -1,0 +1,34 @@
+#%RAML 1.0
+title: sample
+baseUri: v0
+mediaType: application/json
+annotationTypes:
+  handler:
+  selectionPattern:
+/good:
+  get:
+   (handler): "good_handler"
+   responses:
+    200:
+/error:
+  get:
+    (handler): "error_handler"
+    responses:
+      500:
+        (selectionPattern): "Exception.*"
+/redirect:
+  get:
+    (handler): "redirect_handler"
+    responses:
+      301:
+        headers:
+          Location: "integration.response.body.location"
+
+/multi_error:
+  get:
+    (handler): "error_handler"
+    responses:
+      404:
+        (selectionPattern): "NotFound.*"
+      500:
+        (selectionPattern): "Exception.*"
