@@ -1,17 +1,26 @@
+import functools
+
+
 def _parse_response(response):
     response.pattern = response.raw[response.code].get('(selectionPattern)', None)  # NOQA
     return response
 
 
-def _parse_resource(resource):
+def _parse_resource(root, resource):
+    root_role = root.raw.get('(iam_role)', None)
     if getattr(resource, 'method'):
         resource.handler = resource.raw[resource.method].get('(handler)')
+        resource.iam_role = resource.raw[resource.method].get(
+            '(iam_role)',
+            root_role
+        )
         resource.responses = map(_parse_response, resource.responses)
     return resource
 
 
-def parse_annotations(resources):
-    return map(_parse_resource, resources)
+def parse_annotations(root, resources):
+    parse_resource = functools.partial(_parse_resource, root)
+    return map(parse_resource, resources)
 
 
 def build_parent_path(resource):
@@ -34,7 +43,7 @@ def path_part(resource):
     resource.path_part = path_part
     return resource
 
-    
-def transform_resources(resources):
-    resources = parse_annotations(resources)
+
+def transform_resources(root, resources):
+    resources = parse_annotations(root, resources)
     return map(path_part, resources)

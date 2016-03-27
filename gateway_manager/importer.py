@@ -4,6 +4,7 @@ import ramlfications
 import boto3
 import hashlib
 import json
+import functools
 from botocore import exceptions
 from gateway_manager import api
 
@@ -36,16 +37,29 @@ def get_api_by_name(client, name):
     return next((x for x in resp['items'] if x['name'] == name), None)
 
 
-def create_method(client, api_id, resource_id, http_method):
+def create_method(client, api_id, resource, http_method, authorizers):
+    print 'Creating Method {} for {}'.format(http_method, resource.name)
     method = http_method.upper()
-
-    return client.put_method(
+    kwargs = dict(
         restApiId=api_id,
-        resourceId=resource_id,
+        resourceId=resource.aws_id,
         httpMethod=method,
-        authorizationType="none",
-        apiKeyRequired=False
+        apiKeyRequired=False,
     )
+    if hasattr(resource, 'secured_by') and resource.secured_by:
+        print 'resource is secured'
+        authorizer = next(
+            iter(filter(lambda x: x.name == resource.secured_by, authorizers)), None  # NOQA
+        )
+        kwargs['authorizationType'] = "CUSTOM"
+        kwargs['authorizerId'] = authorizer.authorizer_id
+        # attach_handler_policy(client, api_id, authorizer.arn, resource.path, http_method)  # NOQA
+
+    else:
+        kwargs['authorizationType'] = "none"
+
+    print kwargs
+    return client.put_method(**kwargs)
 
 
 def create_request_mapping_template():
@@ -137,7 +151,7 @@ def attach_handler_policy(client, api_id, arn, path, method):
 def create_integration_request(
     client,
     api_id,
-    resource_id,
+    resource,
     http_method,
     arn,
     update=False
@@ -151,10 +165,11 @@ def create_integration_request(
     handler_template = 'arn:aws:apigateway:{}:lambda:path/2015-03-31/functions/{}/invocations'  # NOQA
     handler = handler_template.format(region, arn)
     method = http_method.strip().upper()
+    has_role = hasattr(resource, 'iam_role') and resource.iam_role
     if update:
         client.update_integration(
             restApiId=api_id,
-            resourceId=resource_id,
+            resourceId=resource.aws_id,
             httpMethod=method,
             patchOperations=[
                 {"op": "replace", "path": "/httpMethod", "value": "POST"},
@@ -162,9 +177,9 @@ def create_integration_request(
             ]
         )
     else:
-        client.put_integration(
+        kwargs = dict(
             restApiId=api_id,
-            resourceId=resource_id,
+            resourceId=resource.aws_id,
             httpMethod=method,
             type='AWS',
             # Lambda functions are always invoked via POST
@@ -174,6 +189,11 @@ def create_integration_request(
             requestParameters={},
             requestTemplates=mapping_templates,
         )
+        if has_role:
+            kwargs['credentials'] = resource.iam_role
+        client.put_integration(**kwargs)
+    if not has_role:
+        attach_handler_policy(client, api_id, arn, resource.path, http_method)  # NOQA
 
 
 def create_method_response(
@@ -185,15 +205,18 @@ def create_method_response(
     bodies,
     headers=[],
 ):
+    origin = resource.raw.get('(cors)', {}).get('origin')
     responseModels = {}
-    responseParameters={}
+    responseParameters = {}
     for body in bodies:
         if status_code < 400:
             responseModels[body.mime_type] = "Empty"
         else:
             responseModels[body.mime_type] = "Error"
     for header in headers:
-        responseParameters['method.response.header.{}'.format(header.name)] = True
+        responseParameters['method.response.header.{}'.format(header.name)] = True  # NOQA
+    if origin:
+        responseParameters['method.response.header.Access-Control-Allow-Origin'] = True  # NOQA
     return client.put_method_response(
         restApiId=api_id,
         resourceId=resource.aws_id,
@@ -207,15 +230,16 @@ def create_method_response(
 def create_integration_response(
     client,
     api_id,
-    resource_id,
+    resource,
     http_method,
     status_code,
     selection_pattern=None,
     headers=[]
 ):
+    origin = resource.raw.get('(cors)', {}).get('origin')
     params = dict(
         restApiId=api_id,
-        resourceId=resource_id,
+        resourceId=resource.aws_id,
         httpMethod=http_method,
         statusCode=str(status_code),
     )
@@ -232,15 +256,77 @@ def create_integration_response(
         key = header.name
         value = header.raw.get(key, '')
         response_params['method.response.header.{}'.format(key)] = value
-    print response_params
+    if origin:
+        response_params['method.response.header.Access-Control-Allow-Origin'] = "'{}'".format(origin)  # NOQA
     params['responseParameters'] = response_params
     return client.put_integration_response(
         **params
     )
 
 
-def create_resource(client, api_id, root_id, resource, project_name):
+def create_cors(client, api_id, resource):
+    try:
+        client.delete_method(
+            restApiId=api_id,
+            resourceId=resource.aws_id,
+            httpMethod='OPTIONS'
+        )
+    except exceptions.ClientError as e:
+        if e.response['Error']['Code'] != 'NotFoundException':
+            raise e
+    client.put_method(
+        restApiId=api_id,
+        resourceId=resource.aws_id,
+        httpMethod='OPTIONS',
+        apiKeyRequired=False,
+        authorizationType="none",
+    )
+    cors_data = resource.raw.get('(cors)', {})
+    client.put_method_response(
+        restApiId=api_id,
+        resourceId=resource.aws_id,
+        httpMethod='OPTIONS',
+        statusCode="200",
+        responseParameters={
+            'method.response.header.Access-Control-Allow-Headers': True,
+            'method.response.header.Access-Control-Allow-Methods': True,
+            'method.response.header.Access-Control-Allow-Origin': True,
+        },
+        responseModels={
+            'application/json': 'Empty'
+        }
+    )
+    client.put_integration(
+        restApiId=api_id,
+        resourceId=resource.aws_id,
+        httpMethod='OPTIONS',
+        type='MOCK',
+        # Lambda functions are always invoked via POST
+        # http://docs.aws.amazon.com/lambda/latest/dg/API_Invoke.html
+        requestParameters={},
+        requestTemplates={
+            'application/json': '{"statusCode": 200}'
+        },
+    )
+    client.put_integration_response(
+        restApiId=api_id,
+        resourceId=resource.aws_id,
+        httpMethod='OPTIONS',
+        statusCode='200',
+        selectionPattern="",
+        responseTemplates={},
+        responseParameters={
+            'method.response.header.Access-Control-Allow-Headers': "'{}'".format(cors_data['headers']),  # NOQA
+            'method.response.header.Access-Control-Allow-Methods': "'{}'".format(cors_data['methods']),  # NOQA
+            'method.response.header.Access-Control-Allow-Origin': "'{}'".format(cors_data['origin']),  # NOQA
+        },
+    )
+
+
+def create_resource(client, api_id, root_id, resource, project_name, authorizers):  # NOQA
     resource = create_resource_path(client, api_id, root_id, resource)
+    if resource.raw.get('(cors)'):
+        create_cors(client, api_id, resource)
     if resource.method:
         http_method = resource.method.upper()
         if http_method:
@@ -253,20 +339,17 @@ def create_resource(client, api_id, root_id, resource, project_name):
             except exceptions.ClientError as e:
                 if e.response['Error']['Code'] != 'NotFoundException':
                     raise e
-            method = create_method(client, api_id, resource.aws_id, http_method)
-            print method
-            print 'Finished creating method'
+            method = create_method(client, api_id, resource, http_method, authorizers)
             # resaponse = resource.responses[0]
             # body = response.body[0]
             handler_arn = get_handler_arn(project_name, resource.handler)
             create_integration_request(
                 client,
                 api_id,
-                resource.aws_id,
+                resource,
                 http_method,
                 handler_arn,
             )
-            attach_handler_policy(client, api_id, handler_arn, resource.path, http_method)  # NOQA
             for response in resource.responses:
                 headers = response.headers or []
                 bodies = response.body or []
@@ -282,7 +365,7 @@ def create_resource(client, api_id, root_id, resource, project_name):
                 create_integration_response(
                     client,
                     api_id,
-                    resource.aws_id,
+                    resource,
                     http_method,
                     response.code,
                     selection_pattern=getattr(response, 'pattern', None),
@@ -348,6 +431,49 @@ def grab_root_resource(aws_resources):
     return next((x for x in aws_resources if x['path'] == '/'), None)
 
 
+def lookup_authorize_handler(name):
+    pass
+
+
+def create_security_scheme(client, api_id, project_name, scheme):
+    arn = get_handler_arn(project_name, scheme.settings['handler'])
+    scheme.arn = arn
+    region = client._client_config.region_name
+    handler_template = 'arn:aws:apigateway:{}:lambda:path/2015-03-31/functions/{}/invocations'  # NOQA
+    uri = handler_template.format(region, arn)
+    if hasattr(scheme, 'authorizer_id') and scheme.authorizer_id:
+        client.update_authorizer(
+            restApiId=api_id,
+            authorizerId=scheme.authorizer_id,
+            patchOperations=[
+                {"op": "replace", "path": "/authorizerCredentials", "value": scheme.settings['iam_role']},
+                {"op": "replace", "path": "/identitySource", "value": scheme.settings['token_source']},
+                {"op": "replace", "path": "/authorizerUri", "value": uri},
+            ]
+        )
+    else:
+        response = client.create_authorizer(
+            restApiId=api_id,
+            name=scheme.name,
+            type='TOKEN',
+            authorizerUri=uri,
+            authorizerCredentials=scheme.iam_role,
+            identitySource=scheme.settings['token_source'],
+        )
+        scheme.authorizer_id = response['id']
+    return scheme
+
+
+def associate_authorizers(aws_authorizers, security_schemes):
+    for scheme in security_schemes:
+        authorizer = next(
+            iter(filter(lambda x: x['name'] == scheme.name, aws_authorizers)), None  # NOQA
+        )
+        if authorizer:
+            scheme.authorizer_id = authorizer['id']
+    return security_schemes
+
+
 def main(region, profile='default'):
     project_details = json.load(open('project.json'))
     boto3.setup_default_session(
@@ -362,10 +488,20 @@ def main(region, profile='default'):
         api_gateway = client.create_rest_api(name=api_name)
     aws_resources = client.get_resources(restApiId=api_gateway['id'])['items']
     root = grab_root_resource(aws_resources)
-    resources = api.transform_resources(raml.resources)
+    resources = api.transform_resources(raml, raml.resources)
     # resources = parse_annotations(raml.resources)
     # resources = transform_resources(resources)
     resources = associate_resources(aws_resources, resources)
+    aws_authorizers = client.get_authorizers(restApiId=api_gateway['id'])['items']  # NOQA
+    authorizers = associate_authorizers(aws_authorizers, raml.security_schemes)
+    create_authorizer = functools.partial(
+        create_security_scheme,
+        client,
+        api_gateway['id'],
+        project_details['name']
+    )
+    authorizers = map(create_authorizer, authorizers)
+
     for resource in resources:
         print 'Creating Resource'
         create_resource(
@@ -373,7 +509,8 @@ def main(region, profile='default'):
             api_gateway['id'],
             root['id'],
             resource,
-            project_details['name']
+            project_details['name'],
+            authorizers
         )
     deployment = client.create_deployment(
         restApiId=api_gateway['id'],

@@ -139,7 +139,7 @@ def build_server(resources):
 def build_wsgi_app(raml_file):
     # read raml, create router
     raml = ramlfications.parse(raml_file)
-    resources = api.transform_resources(raml.resources)
+    resources = api.transform_resources(raml, raml.resources)
     resources = filter(filter_absent_method, resources)
     app = build_server(resources)
     print app.map
