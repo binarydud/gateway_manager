@@ -1,6 +1,7 @@
 import os
 import argparse
 import json
+from collections import OrderedDict
 _handler_template = """
 def handle(event, context):
     return None
@@ -13,21 +14,20 @@ def generate_file(path, content):
             f.write(content)
 
 
-def generate(name, description, memory=128, timeout=5):
+def generate(name, description, memory=128, timeout=5, runtime='python'):
     function_path = 'functions/{}'.format(name)
     file_path = '{}/main.py'.format(function_path)
     config_path = '{}/function.json'.format(function_path)
     apex_ignore_path = '{}/.apexignore'.format(function_path)
     git_ignore_path = '{}/.gitignore'.format(function_path)
-    config = dict(
+
+    config = OrderedDict(
         name=name,
         description=description,
         memory=memory,
         timeout=timeout,
-        runtime='python',
-        hooks={
-            "build": "pip install -r requirements.txt -t ."
-        },
+        runtime=runtime,
+        hooks={},
         environment={},
     )
 
@@ -36,5 +36,6 @@ def generate(name, description, memory=128, timeout=5):
         os.makedirs(function_path)
     generate_file(file_path, _handler_template)
     generate_file(config_path, config_template)
-    generate_file(apex_ignore_path, '*.dist-info/')
-    generate_file(git_ignore_path, '*.dist-info/')
+    if runtime == "python":
+        generate_file(apex_ignore_path, '*.dist-info/')
+        generate_file(git_ignore_path, '*.dist-info/')

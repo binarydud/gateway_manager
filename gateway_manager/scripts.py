@@ -15,9 +15,10 @@ def cli():
 @click.option('--description', default="")
 @click.option('--memory', default=128, type=int)
 @click.option('--timeout', default=5, type=int)
-def generate(name, description, memory, timeout):
+@click.option('--runtime', default='python', type=str)
+def generate(name, description, memory, timeout, runtime):
     """Create a new lambda function."""
-    generate_function.generate(name, description, memory, timeout)
+    generate_function.generate(name, description, memory, timeout, runtime)
     click.echo('finished generating %s' % name)
 
 
