@@ -1,10 +1,10 @@
 from setuptools import setup, find_packages
 INSTALL_REQUIRES = [
     'click==6.3',
-    'ramlfications==0.1.9',
-    'boto3==1.2.6',
+    'ramlfications',
+    'boto3',
     'Paste==2.0.2',
-    'Routes==2.2',
+    'Routes>=2.2',
     'WebOb==1.5.1',
 ]
 
