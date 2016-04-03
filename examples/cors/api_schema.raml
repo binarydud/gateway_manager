@@ -1,0 +1,26 @@
+#%RAML 1.0
+baseUri: v0
+title: item_lsit
+annotationTypes:
+  handler:
+  selectionPattern:
+  iam_role:
+  cors:
+(iam_role): "arn:aws:iam::<role_id>:role/api_gateway"
+/items:
+  (cors):
+    methods: 'GET,POST,OPTIONS'
+    headers: 'Content-Type,X-Amz-Date,Authorization,X-Api-Key'
+    origin: '*'
+  get:
+    (handler): "list"
+    responses:
+      200:
+        body:
+          application/json:
+  post:
+    (handler): create_item
+    responses:
+      200:
+        body:
+          application/json:

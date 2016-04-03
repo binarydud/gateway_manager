@@ -1,0 +1,35 @@
+#%RAML 1.0
+baseUri: v0
+title: item_list
+annotationTypes:
+  handler:
+  selectionPattern:
+  iam_role:
+  cors:
+securitySchemes:
+  - custom_authorizer:
+      description: custom aws authorizer
+      type: x-aws-custom
+      describedBy:
+        headers:
+          Authorization:
+      settings:
+        handler: authorizer
+        token_source: method.request.header.Authorization
+        iam_role: "arn:aws:iam::<role_id>:role/api_gateway"
+(iam_role): "arn:aws:iam::<role_id>:role/api_gateway"
+/items:
+  get:
+    securedBy: custom_authorizer
+    (handler): "item_list"
+    responses:
+      200:
+        body:
+          application/json:
+  post:
+    securedBy: custom_authorizer
+    (handler): "create_item"
+    responses:
+      200:
+        body:
+          application/json:

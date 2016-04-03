@@ -1,0 +1,23 @@
+#%RAML 1.0
+baseUri: v0
+title: item_simple
+annotationTypes:
+  handler:
+  selectionPattern:
+  iam_role:
+  cors:
+(iam_role): "arn:aws:iam::<role_id>:role/api_gateway"
+/simple:
+  get:
+    (handler): "get_items"
+    (iam_role): "arn:aws:iam::<role_id>:role/api_gateway_get"
+    responses:
+      200:
+        body:
+          application/json:
+  post:
+    (handler): "add_item"
+    responses:
+      200:
+        body:
+          application/json:
