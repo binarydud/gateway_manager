@@ -489,8 +489,6 @@ def main(region, profile='default'):
     aws_resources = client.get_resources(restApiId=api_gateway['id'])['items']
     root = grab_root_resource(aws_resources)
     resources = api.transform_resources(raml, raml.resources)
-    # resources = parse_annotations(raml.resources)
-    # resources = transform_resources(resources)
     resources = associate_resources(aws_resources, resources)
     aws_authorizers = client.get_authorizers(restApiId=api_gateway['id'])['items']  # NOQA
     authorizers = associate_authorizers(aws_authorizers, raml.security_schemes)
