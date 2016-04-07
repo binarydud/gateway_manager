@@ -5,6 +5,21 @@ mediaType: application/json
 annotationTypes:
   handler:
   selectionPattern:
+  iam_role:
+  cors:
+  endpoint:
+securitySchemes:
+  - custom_authorizer:
+      description: custom aws authorizer
+      type: x-aws-custom
+      describedBy:
+        headers:
+          Authorization:
+      settings:
+        handler: authorizer
+        token_source: method.request.header.Authorization
+        iam_role: "arn:aws:iam::123:role/authorizer_role"
+(iam_role): "arn:aws:iam::123:role/api_gateway"
 /good:
   get:
    (handler): "good_handler"
@@ -24,7 +39,7 @@ annotationTypes:
         headers:
           Location: "integration.response.body.location"
 
-/multi_error:
+/multiple_error:
   get:
     (handler): "error_handler"
     responses:
@@ -32,3 +47,16 @@ annotationTypes:
         (selectionPattern): "NotFound.*"
       500:
         (selectionPattern): "Exception.*"
+/secured:
+  get:
+    securedBy: custom_authorizer
+    (handler): good_handler
+    responses:
+      200:
+
+/nested:
+  /route:
+    get:
+      (handler): good_handler
+      responses:
+        200:

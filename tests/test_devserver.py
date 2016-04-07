@@ -1,9 +1,8 @@
 import pytest
 from pretend import stub
-from pyramid import testing
 from gateway_manager import devserver
 
-@pytest.mark.slow
+@pytest.mark.skip(reason="no way of currently testing this")
 def test_import_lambda_function():
     module = devserver.import_lambda_function('good_handler')
     assert hasattr(module, 'handle')
@@ -33,14 +32,3 @@ def test_filter_on_response_pattern():
         Exception,
         response
     )
-
-def test_add_resource():
-    resource = stub(
-        path="/test",
-        method="get"
-    )
-    with testing.testConfig() as config:
-        print config
-        devserver.add_resource(config, resource)
-        import pdb;pdb.set_trace()
-        assert False
