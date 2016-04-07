@@ -2,7 +2,8 @@ import functools
 
 
 def _parse_response(response):
-    response.pattern = response.raw[response.code].get('(selectionPattern)', None)  # NOQA
+    if response.raw[response.code]:
+        response.pattern = response.raw[response.code].get('(selectionPattern)', None)  # NOQA
     return response
 
 
@@ -10,6 +11,7 @@ def _parse_resource(root, resource):
     root_role = root.raw.get('(iam_role)', None)
     if getattr(resource, 'method'):
         resource.handler = resource.raw[resource.method].get('(handler)')
+        resource.endpoint = resource.raw[resource.method].get('(ednpoint)')
         resource.iam_role = resource.raw[resource.method].get(
             '(iam_role)',
             root_role

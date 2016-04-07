@@ -7,6 +7,7 @@ import json
 import functools
 from botocore import exceptions
 from gateway_manager import api
+from gateway_manager.gateway import ApiGateway
 
 
 def get_handler_arn(project_name, hander_name):
@@ -16,20 +17,6 @@ def get_handler_arn(project_name, hander_name):
         hander_name
     ))
     return response['Configuration']['FunctionArn']
-
-
-"""
-def parse_annotations(resources):
-    for resource in resources:
-        if getattr(resource, 'method'):
-            resource.handler = resource.raw[resource.method].get('(handlerArn)')
-            resource.role = resource.raw[resource.method].get('(roleArn)')
-            resource.is_valid_gateway = True
-            for response in resource.responses:
-                response.pattern = response.raw[response.code].get('(selectionPattern)', None)  # NOQA
-
-    return resources
-"""
 
 
 def get_api_by_name(client, name):
@@ -373,34 +360,13 @@ def create_resource(client, api_id, root_id, resource, project_name, authorizers
                 )
 
 
-def remove_prefix(prefix, path):
-    if prefix and path.startswith(prefix):
-        return path[len(prefix):]
-    return path
-
-
-def build_parent_path(resource):
-    if resource.parent is None:
-        return ''
-    else:
-        return resource.parent.path
-
-
-def path_part(resource):
-    parent_path = build_parent_path(resource)
-    path_part = remove_prefix(parent_path, resource.path)
-    path_part = remove_prefix('/', path_part)
-    resource.path_part = path_part
-    return resource
-
-
 def create_resource_path(client, api_id, root_id, resource):
     parent_id = getattr(resource.parent, 'aws_id', None)
     if parent_id is None:
         parent_id = root_id
     params = {
         'restApiId': api_id,
-        'pathPart': path_part(resource).path_part,
+        'pathPart': api.path_part(resource).path_part,
         'parentId': parent_id
     }
     if getattr(resource, 'aws_id', None):
@@ -414,11 +380,6 @@ def create_resource_path(client, api_id, root_id, resource):
     return resource
 
 
-def transform_resources(resources):
-    resources = map(path_part, resources)
-    return resources
-
-
 def associate_resources(aws_resources, raml_resources):
     lookup_table = {k['path']: k for k in aws_resources}
     for resource in raml_resources:
@@ -429,10 +390,6 @@ def associate_resources(aws_resources, raml_resources):
 
 def grab_root_resource(aws_resources):
     return next((x for x in aws_resources if x['path'] == '/'), None)
-
-
-def lookup_authorize_handler(name):
-    pass
 
 
 def create_security_scheme(client, api_id, project_name, scheme):
@@ -475,6 +432,25 @@ def associate_authorizers(aws_authorizers, security_schemes):
 
 
 def main(region, profile='default'):
+    session = boto3.Session(
+        profile_name=profile,
+        region_name=region
+    )
+    apex_json = json.load(open('project.json'))
+    raml = ramlfications.parse('api_schema.raml')
+    gateway = ApiGateway(raml, apex_json, session)
+    print 'Creating Api Gateway'
+    gateway.create()
+    gateway.load()
+    print 'Creating Authorizers'
+    gateway.create_authorizers()
+    print 'Creating Resources'
+    gateway.create_resources()
+    print 'Deploying Stage'
+    print gateway.create_deployment()
+
+
+def old(region, profile='default'):
     project_details = json.load(open('project.json'))
     boto3.setup_default_session(
         profile_name=profile,
@@ -489,11 +465,9 @@ def main(region, profile='default'):
     aws_resources = client.get_resources(restApiId=api_gateway['id'])['items']
     root = grab_root_resource(aws_resources)
     resources = api.transform_resources(raml, raml.resources)
-    # resources = parse_annotations(raml.resources)
-    # resources = transform_resources(resources)
     resources = associate_resources(aws_resources, resources)
     aws_authorizers = client.get_authorizers(restApiId=api_gateway['id'])['items']  # NOQA
-    authorizers = associate_authorizers(aws_authorizers, raml.security_schemes)
+    authorizers = associate_authorizers(aws_authorizers, raml.security_schemes or [])  # NOQA
     create_authorizer = functools.partial(
         create_security_scheme,
         client,
