@@ -1,0 +1,15 @@
+#%RAML 1.0
+baseUri: v0
+title: item_redirect
+annotationTypes:
+  handler:
+  selectionPattern:
+  iam_role:
+(iam_role): "arn:aws:iam::<role_id>:role/api_gateway"
+/redirect:
+  get:
+    (handler): "simple_redirect
+    responses:
+      302:
+        headers:
+          Location: "integration.response.body.location"
